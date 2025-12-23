@@ -1,1 +1,140 @@
+# Set Azure Blob Storage access key for Databricks
+spark.conf.set(
+  "fs.azure.account.key.snowflakesession.blob.core.windows.net",
+  "Access Key *********************************************************"
+)
+
+# Read insurance claims JSON file from Azure Blob Storage
+df_raw = (
+    spark.read
+         .option("multiLine", "true")
+         .json("wasbs://adf@snowflakesession.blob.core.windows.net/insurance_claims.json")
+)
+
+# Inspect raw JSON schema and data
+df_raw.printSchema()
+df_raw.show(truncate=False)
+
+# Import required PySpark functions
+from pyspark.sql.functions import col, to_date, struct
+
+# Standardize nested JSON fields and preserve full raw JSON as semi-structured data
+df_standardized = (
+    df_raw
+    .select(
+        col("claim_id"),
+        col("policy.policy_number").alias("policy_number"),
+        col("policy.insurance_type").alias("insurance_type"),
+        col("policy.coverage_amount").alias("coverage_amount"),
+        col("claimant.customer_id").alias("customer_id"),
+        col("claimant.region").alias("region"),
+        col("treatment.claim_amount").alias("claim_amount"),
+        col("payment.status").alias("payment_status"),
+        col("payment.payment_mode").alias("payment_mode"),
+        to_date(col("claim_date")).alias("claim_date"),
+        struct("*").alias("raw_json")
+    )
+)
+
+# Validate standardized data
+df_standardized.printSchema()
+df_standardized.show(truncate=False)
+
+# Snowflake connection configuration for Spark connector
+sfOptions = {
+    "sfURL": "FJPKTEI-SZ94461.snowflakecomputing.com",
+    "sfUser": "ICICI_USER",
+    "sfPassword": "Icici@123",
+    "sfWarehouse": "ICICI_WH",
+    "sfDatabase": "ICICI_INSURANCE_DB",
+    "sfSchema": "CLAIMS_SCHEMA"
+}
+
+# Write standardized insurance claims data into Snowflake table
+(
+    df_standardized.write
+        .format("snowflake")
+        .options(**sfOptions)
+        .option("dbtable", "CLAIMS_JSON")
+        .mode("append")
+        .save()
+)
+
+# Post-load validation in Databricks
+df_standardized.count()
+df_standardized.select("payment_status").distinct().show()
+
+# Snowflake SQL setup and analytics
+"""
+USE ROLE ACCOUNTADMIN;
+
+CREATE OR REPLACE WAREHOUSE ICICI_WH
+WAREHOUSE_SIZE = XSMALL
+AUTO_SUSPEND = 60
+AUTO_RESUME = TRUE;
+
+CREATE OR REPLACE DATABASE ICICI_INSURANCE_DB;
+CREATE OR REPLACE SCHEMA ICICI_INSURANCE_DB.CLAIMS_SCHEMA;
+
+CREATE OR REPLACE ROLE ICICI_CLAIMS_ROLE;
+
+GRANT USAGE ON WAREHOUSE ICICI_WH TO ROLE ICICI_CLAIMS_ROLE;
+GRANT USAGE ON DATABASE ICICI_INSURANCE_DB TO ROLE ICICI_CLAIMS_ROLE;
+GRANT USAGE ON SCHEMA ICICI_INSURANCE_DB.CLAIMS_SCHEMA TO ROLE ICICI_CLAIMS_ROLE;
+
+GRANT CREATE TABLE ON SCHEMA ICICI_INSURANCE_DB.CLAIMS_SCHEMA TO ROLE ICICI_CLAIMS_ROLE;
+
+GRANT SELECT ON FUTURE TABLES
+IN SCHEMA ICICI_INSURANCE_DB.CLAIMS_SCHEMA
+TO ROLE ICICI_CLAIMS_ROLE;
+
+CREATE OR REPLACE USER ICICI_USER
+PASSWORD = 'Icici@123'
+DEFAULT_ROLE = ICICI_CLAIMS_ROLE
+DEFAULT_WAREHOUSE = ICICI_WH
+DEFAULT_NAMESPACE = ICICI_INSURANCE_DB.CLAIMS_SCHEMA
+MUST_CHANGE_PASSWORD = FALSE;
+
+GRANT ROLE ICICI_CLAIMS_ROLE TO USER ICICI_USER;
+
+USE ROLE ICICI_CLAIMS_ROLE;
+USE WAREHOUSE ICICI_WH;
+USE DATABASE ICICI_INSURANCE_DB;
+USE SCHEMA CLAIMS_SCHEMA;
+
+CREATE OR REPLACE TABLE CLAIMS_JSON (
+    CLAIM_ID STRING,
+    POLICY_NUMBER STRING,
+    INSURANCE_TYPE STRING,
+    COVERAGE_AMOUNT NUMBER,
+    CUSTOMER_ID STRING,
+    REGION STRING,
+    CLAIM_AMOUNT NUMBER,
+    PAYMENT_STATUS STRING,
+    PAYMENT_MODE STRING,
+    CLAIM_DATE DATE,
+    RAW_JSON VARIANT
+);
+
+SELECT
+    INSURANCE_TYPE,
+    REGION,
+    SUM(CLAIM_AMOUNT) AS TOTAL_APPROVED_AMOUNT
+FROM CLAIMS_JSON
+WHERE PAYMENT_STATUS = 'APPROVED'
+GROUP BY INSURANCE_TYPE, REGION;
+
+SELECT
+    RAW_JSON:policy.insurance_type::STRING AS INSURANCE_TYPE,
+    RAW_JSON:claimant.region::STRING AS REGION,
+    RAW_JSON:treatment.claim_amount::NUMBER AS CLAIM_AMOUNT
+FROM CLAIMS_JSON
+WHERE RAW_JSON:payment.status = 'APPROVED';
+
+SELECT COUNT(*) FROM CLAIMS_JSON;
+
+SELECT PAYMENT_STATUS, COUNT(*)
+FROM CLAIMS_JSON
+GROUP BY PAYMENT_STATUS;
+"""
 
