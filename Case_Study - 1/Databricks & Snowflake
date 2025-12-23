@@ -1,0 +1,83 @@
+# Set Azure Blob Storage access key so Databricks can access the container
+spark.conf.set(
+    "fs.azure.account.key.snowflakesession.blob.core.windows.net",
+    "Access key ********************************************************"
+)
+
+# Read multiline JSON file from Azure Blob Storage
+df_raw = (
+    spark.read
+         .option("multiLine", "true")
+         .json("wasbs://adf@snowflakesession.blob.core.windows.net/application_logs.json")
+)
+
+# Check schema and raw data
+df_raw.printSchema()
+df_raw.show(truncate=False)
+
+# Import required PySpark functions
+from pyspark.sql.functions import col, when, to_timestamp
+
+# Transform data for analytics
+df_transformed = (
+    df_raw
+        .withColumn("EVENT_TIME", to_timestamp(col("event_time")))
+        .withColumn("ERROR_FLAG", when(col("log_level") == "ERROR", 1).otherwise(0))
+        .select(
+            col("event_id").alias("EVENT_ID"),
+            col("EVENT_TIME"),
+            col("service_name").alias("SERVICE_NAME"),
+            col("log_level").alias("LOG_LEVEL"),
+            col("user_id").alias("USER_ID"),
+            col("api_endpoint").alias("API_ENDPOINT"),
+            col("response_time_ms").alias("RESPONSE_TIME_MS"),
+            col("error_message").alias("ERROR_MESSAGE"),
+            col("region").alias("REGION"),
+            col("ERROR_FLAG")
+        )
+)
+
+# Display transformed data
+df_transformed.show(truncate=False)
+
+# Snowflake connection options for Spark connector
+sfOptions = {
+    "sfURL": "<account>.snowflakecomputing.com",
+    "sfUser": "LOG_ANALYTICS_USER",
+    "sfPassword": "Log@1234",
+    "sfWarehouse": "LOG_ANALYTICS_WH",
+    "sfDatabase": "LOG_ANALYTICS_DB",
+    "sfSchema": "LOG_SCHEMA"
+}
+
+# Snowflake SQL setup
+
+USE ROLE ACCOUNTADMIN;
+
+CREATE OR REPLACE WAREHOUSE LOG_ANALYTICS_WH
+WAREHOUSE_SIZE = XSMALL
+AUTO_SUSPEND = 60
+AUTO_RESUME = TRUE;
+
+CREATE OR REPLACE DATABASE LOG_ANALYTICS_DB;
+CREATE OR REPLACE SCHEMA LOG_ANALYTICS_DB.LOG_SCHEMA;
+
+CREATE OR REPLACE ROLE LOG_ANALYTICS_ROLE;
+
+GRANT USAGE ON WAREHOUSE LOG_ANALYTICS_WH TO ROLE LOG_ANALYTICS_ROLE;
+GRANT USAGE ON DATABASE LOG_ANALYTICS_DB TO ROLE LOG_ANALYTICS_ROLE;
+GRANT USAGE ON SCHEMA LOG_ANALYTICS_DB.LOG_SCHEMA TO ROLE LOG_ANALYTICS_ROLE;
+
+GRANT CREATE TABLE, INSERT, SELECT
+ON SCHEMA LOG_ANALYTICS_DB.LOG_SCHEMA
+TO ROLE LOG_ANALYTICS_ROLE;
+
+CREATE OR REPLACE USER LOG_ANALYTICS_USER
+PASSWORD = 'Log@1234'
+DEFAULT_ROLE = LOG_ANALYTICS_ROLE
+DEFAULT_WAREHOUSE = LOG_ANALYTICS_WH
+DEFAULT_NAMESPACE = LOG_ANALYTICS_DB.LOG_SCHEMA
+MUST_CHANGE_PASSWORD = FALSE;
+
+GRANT ROLE LOG_ANALYTICS_ROLE TO USER LOG_ANALYTICS_USER;
+
