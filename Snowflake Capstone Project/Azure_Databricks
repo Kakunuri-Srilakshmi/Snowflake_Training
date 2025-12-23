@@ -1,1 +1,86 @@
+# Import required function
+from pyspark.sql.functions import col
+
+# Snowflake connection details
+sf_options = {
+  "sfURL": "FJPKTEI-SZ94461.snowflakecomputing.com",
+  "sfUser": "DATABRICKS_USER",
+  "sfPassword": "StrongPassword@123",
+  "sfDatabase": "RETAIL_DB",
+  "sfSchema": "RAW",
+  "sfWarehouse": "ELT_WH",
+  "sfRole": "TRANSFORM_ROLE"
+}
+
+# Read customers data from FileStore
+customers_df = spark.read \
+.option("header", "true") \
+.option("inferSchema", "true") \
+.csv("/FileStore/tables/customers.csv")
+
+customers_df.show()
+
+# Read orders data from FileStore
+orders_df = spark.read \
+.option("header", "true") \
+.option("inferSchema", "true") \
+.csv("/FileStore/tables/orders.csv")
+
+orders_df.show()
+
+# Read payments data from FileStore
+payments_df = spark.read \
+.option("header", "true") \
+.option("inferSchema", "true") \
+.csv("/FileStore/tables/payments_2024_02.csv")
+
+payments_df.show()
+
+# Write customers data to Snowflake RAW table
+customers_df.write \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_CUSTOMERS") \
+.mode("append") \
+.save()
+
+# Verify customers data in Snowflake
+spark.read \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_CUSTOMERS") \
+.load() \
+.show()
+
+# Write orders data to Snowflake RAW table
+orders_df.write \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_ORDERS") \
+.mode("append") \
+.save()
+
+# Verify orders data in Snowflake
+spark.read \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_ORDERS") \
+.load() \
+.show()
+
+# Write payments data to Snowflake RAW table
+payments_df.write \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_PAYMENTS") \
+.mode("append") \
+.save()
+
+# Verify payments data in Snowflake
+spark.read \
+.format("snowflake") \
+.options(**sf_options) \
+.option("dbtable", "RAW_PAYMENTS") \
+.load() \
+.show()
 
