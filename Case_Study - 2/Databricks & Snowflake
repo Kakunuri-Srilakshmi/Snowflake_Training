@@ -50,16 +50,6 @@ sfOptions = {
     "sfSchema": "CLAIMS_SCHEMA"
 }
 
-# Write standardized insurance claims data into Snowflake table
-(
-    df_standardized.write
-        .format("snowflake")
-        .options(**sfOptions)
-        .option("dbtable", "CLAIMS_JSON")
-        .mode("append")
-        .save()
-)
-
 # Post-load validation in Databricks
 df_standardized.count()
 df_standardized.select("payment_status").distinct().show()
