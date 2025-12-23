@@ -1,0 +1,205 @@
+-- Use account admin role for setup
+USE ROLE ACCOUNTADMIN;
+
+-- Create warehouse for ELT processing
+CREATE OR REPLACE WAREHOUSE ELT_WH
+WAREHOUSE_SIZE = SMALL
+AUTO_SUSPEND = 60
+AUTO_RESUME = TRUE;
+
+-- Create database for retail project
+CREATE OR REPLACE DATABASE RETAIL_DB;
+USE DATABASE RETAIL_DB;
+
+-- Create schemas for raw, curated, and analytics layers
+CREATE OR REPLACE SCHEMA RAW;
+CREATE OR REPLACE SCHEMA CURATED;
+CREATE OR REPLACE SCHEMA ANALYTICS;
+
+-- Create roles for data access and transformations
+CREATE OR REPLACE ROLE RAW_DATA_ROLE;
+CREATE OR REPLACE ROLE TRANSFORM_ROLE;
+CREATE OR REPLACE ROLE ANALYTICS_ROLE;
+
+-- Create user for Databricks to connect Snowflake
+CREATE OR REPLACE USER DATABRICKS_USER
+PASSWORD = 'StrongPassword@123'
+DEFAULT_ROLE = TRANSFORM_ROLE
+DEFAULT_WAREHOUSE = ELT_WH
+MUST_CHANGE_PASSWORD = FALSE;
+
+-- Grant roles to Databricks user
+GRANT ROLE RAW_DATA_ROLE TO USER DATABRICKS_USER;
+GRANT ROLE TRANSFORM_ROLE TO USER DATABRICKS_USER;
+
+-- Grant warehouse usage to Databricks user
+GRANT USAGE ON WAREHOUSE ELT_WH TO USER DATABRICKS_USER;
+
+-- Create raw customers table
+CREATE OR REPLACE TABLE RAW.RAW_CUSTOMERS (
+  customer_id INT,
+  first_name STRING,
+  last_name STRING,
+  email STRING,
+  city STRING,
+  created_date DATE
+);
+
+-- Create raw orders table
+CREATE OR REPLACE TABLE RAW.RAW_ORDERS (
+  order_id INT,
+  customer_id INT,
+  order_date DATE,
+  order_amount NUMBER,
+  order_status STRING
+);
+
+-- Create raw payments table
+CREATE OR REPLACE TABLE RAW.RAW_PAYMENTS (
+  payment_id STRING,
+  order_id INT,
+  payment_date DATE,
+  payment_mode STRING,
+  payment_amount NUMBER
+);
+
+-- Create curated customers table structure
+CREATE OR REPLACE TABLE CURATED.CUSTOMERS_CURATED (
+  customer_id INT,
+  full_name STRING,
+  email STRING,
+  city STRING,
+  customer_since DATE
+);
+
+-- Create curated orders table structure
+CREATE OR REPLACE TABLE CURATED.ORDERS_CURATED (
+  order_id INT,
+  customer_id INT,
+  order_date DATE,
+  order_amount NUMBER
+);
+
+-- Create curated payments table structure
+CREATE OR REPLACE TABLE CURATED.PAYMENTS_CURATED (
+  payment_id STRING,
+  order_id INT,
+  payment_date DATE,
+  payment_mode STRING,
+  payment_amount NUMBER
+);
+
+-- Create final analytics table structure
+CREATE OR REPLACE TABLE ANALYTICS.CUSTOMER_SALES_SUMMARY (
+  customer_id INT,
+  full_name STRING,
+  total_orders INT,
+  total_sales NUMBER,
+  last_order_date DATE
+);
+
+-- Grant database usage to roles
+USE ROLE ACCOUNTADMIN;
+GRANT USAGE ON DATABASE RETAIL_DB TO ROLE RAW_DATA_ROLE;
+GRANT USAGE ON DATABASE RETAIL_DB TO ROLE TRANSFORM_ROLE;
+
+-- Grant schema usage for raw layer
+GRANT USAGE ON SCHEMA RETAIL_DB.RAW TO ROLE RAW_DATA_ROLE;
+GRANT USAGE ON SCHEMA RETAIL_DB.RAW TO ROLE TRANSFORM_ROLE;
+
+-- Grant schema usage for curated and analytics layers
+GRANT USAGE ON SCHEMA RETAIL_DB.CURATED TO ROLE TRANSFORM_ROLE;
+GRANT USAGE ON SCHEMA RETAIL_DB.ANALYTICS TO ROLE TRANSFORM_ROLE;
+
+-- Grant insert and select permissions on raw tables
+GRANT INSERT, SELECT ON ALL TABLES IN SCHEMA RETAIL_DB.RAW
+TO ROLE TRANSFORM_ROLE;
+
+-- Grant permissions on future raw tables
+GRANT INSERT, SELECT ON FUTURE TABLES IN SCHEMA RETAIL_DB.RAW
+TO ROLE TRANSFORM_ROLE;
+
+-- Reconfirm transform role for Databricks user
+GRANT ROLE TRANSFORM_ROLE TO USER DATABRICKS_USER;
+
+-- Set context for transformation queries
+USE ROLE ACCOUNTADMIN;
+USE WAREHOUSE ELT_WH;
+USE DATABASE RETAIL_DB;
+
+-- Populate curated customers table with transformed data
+CREATE OR REPLACE TABLE CURATED.CUSTOMERS_CURATED AS
+SELECT
+    customer_id,
+    first_name || ' ' || last_name AS full_name,
+    email,
+    city,
+    created_date AS customer_since
+FROM RAW.RAW_CUSTOMERS;
+
+-- Populate curated orders table with completed orders only
+CREATE OR REPLACE TABLE CURATED.ORDERS_CURATED AS
+SELECT
+    order_id,
+    customer_id,
+    order_date,
+    order_amount
+FROM RAW.RAW_ORDERS
+WHERE order_status = 'COMPLETED';
+
+-- Populate curated payments table
+CREATE OR REPLACE TABLE CURATED.PAYMENTS_CURATED AS
+SELECT
+    payment_id,
+    order_id,
+    payment_date,
+    payment_mode,
+    payment_amount
+FROM RAW.RAW_PAYMENTS;
+
+-- Create final analytics table with customer sales summary
+CREATE OR REPLACE TABLE ANALYTICS.CUSTOMER_SALES_SUMMARY AS
+SELECT
+    c.customer_id,
+    c.full_name,
+    COUNT(o.order_id) AS total_orders,
+    SUM(o.order_amount) AS total_sales,
+    MAX(o.order_date) AS last_order_date
+FROM CURATED.CUSTOMERS_CURATED c
+JOIN CURATED.ORDERS_CURATED o
+    ON c.customer_id = o.customer_id
+JOIN CURATED.PAYMENTS_CURATED p
+    ON o.order_id = p.order_id
+GROUP BY
+    c.customer_id,
+    c.full_name;
+
+-- Verify final analytics output
+SELECT * FROM ANALYTICS.CUSTOMER_SALES_SUMMARY;
+
+-- Verify raw and curated data
+SELECT * FROM RAW.RAW_CUSTOMERS;
+SELECT * FROM CURATED.CUSTOMERS_CURATED;
+SELECT * FROM ANALYTICS.CUSTOMER_SALES_SUMMARY;
+
+-- Create scheduled task to refresh analytics table daily
+CREATE OR REPLACE TASK DAILY_SALES_REFRESH
+WAREHOUSE = ELT_WH
+SCHEDULE = 'USING CRON 0 2 * * * UTC'
+AS
+CREATE OR REPLACE TABLE ANALYTICS.CUSTOMER_SALES_SUMMARY AS
+SELECT
+    c.customer_id,
+    c.full_name,
+    COUNT(o.order_id) AS total_orders,
+    SUM(o.order_amount) AS total_sales,
+    MAX(o.order_date) AS last_order_date
+FROM CURATED.CUSTOMERS_CURATED c
+JOIN CURATED.ORDERS_CURATED o
+    ON c.customer_id = o.customer_id
+JOIN CURATED.PAYMENTS_CURATED p
+    ON o.order_id = p.order_id
+GROUP BY c.customer_id, c.full_name;
+
+-- Enable the scheduled task
+ALTER TASK DAILY_SALES_REFRESH RESUME;
