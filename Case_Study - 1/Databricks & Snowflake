@@ -42,7 +42,7 @@ df_transformed.show(truncate=False)
 
 # Snowflake connection options for Spark connector
 sfOptions = {
-    "sfURL": "<account>.snowflakecomputing.com",
+    "sfURL": "FJPKTEI-SZ94461.snowflakecomputing.com",
     "sfUser": "LOG_ANALYTICS_USER",
     "sfPassword": "Log@1234",
     "sfWarehouse": "LOG_ANALYTICS_WH",
